@@ -1,0 +1,82 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String?
+  phone     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  // Relations
+  bikes     Bike[]
+  reports   TheftReport[]
+}
+
+model Bike {
+  id            String   @id @default(cuid())
+  vin           String?  @unique // Vehicle Identification Number
+  engineNumber  String?  @unique
+  plateNumber   String?  @unique
+  make          String
+  model         String
+  year          Int?
+  color         String?
+  category      String?  // e.g., Sport, Cruiser, Touring, etc.
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  
+  // Relations
+  ownerId       String
+  owner         User     @relation(fields: [ownerId], references: [id])
+  reports       TheftReport[]
+  images        BikeImage[]
+}
+
+model TheftReport {
+  id            String   @id @default(cuid())
+  status        ReportStatus @default(PENDING)
+  theftDate     DateTime
+  theftLocation String?
+  description   String?
+  policeReport  String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  
+  // Relations
+  bikeId        String
+  bike          Bike     @relation(fields: [bikeId], references: [id])
+  reportedBy    String
+  reporter      User     @relation(fields: [reportedBy], references: [id])
+}
+
+model BikeImage {
+  id        String   @id @default(cuid())
+  url       String
+  filename  String?
+  createdAt DateTime @default(now())
+  
+  // Relations
+  bikeId    String
+  bike      Bike     @relation(fields: [bikeId], references: [id])
+}
+
+enum ReportStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  RESOLVED
+}
