@@ -16,7 +16,8 @@ datasource db {
 
 model User {
   id        String   @id @default(auto()) @map("_id") @db.ObjectId
-  email     String   @unique  name      String?
+  email     String   @unique
+  name      String?
   phone     String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -47,7 +48,7 @@ model Bike {
 }
 
 model TheftReport {
-  id            String   id @default(auto()) @map("_id") @db.ObjectId
+  id            String   @id @default(auto()) @map("_id") @db.ObjectId
   status        ReportStatus @default(PENDING)
   theftDate     DateTime
   theftLocation String?
@@ -64,7 +65,7 @@ model TheftReport {
 }
 
 model BikeImage {
-  id        String   id @default(auto()) @map("_id") @db.ObjectId
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
   url       String
   filename  String?
   createdAt DateTime @default(now())
