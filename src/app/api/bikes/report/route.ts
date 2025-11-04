@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
-import { put } from '@vercel/blob'; // Import 'put' dari Vercel Blob
+import { put } from '@vercel/blob';
 import { Prisma } from '@prisma/client';
 
 export async function POST(request: NextRequest) {
@@ -8,17 +8,14 @@ export async function POST(request: NextRequest) {
     const formData = await request.formData();
     
     // --- 1. Ekstrak Data dari FormData ---
-    
-    // Data Pelapor (User)
     const reporterData = {
       email: formData.get('reporterEmail') as string,
       name: formData.get('reporterName') as string,
       phone: formData.get('reporterPhone') as string,
     };
 
-    // Data Motor (Bike)
     const bikeData = {
-      vin: formData.get('vin') as string, // VIN adalah kunci utama
+      vin: formData.get('vin') as string,
       make: formData.get('make') as string,
       model: formData.get('model') as string,
       year: formData.get('year') ? parseInt(formData.get('year') as string) : null,
@@ -28,7 +25,6 @@ export async function POST(request: NextRequest) {
       plateNumber: formData.get('plateNumber') as string,
     };
 
-    // Data Laporan Pencurian (Theft)
     const theftData = {
       theftDate: new Date(formData.get('theftDate') as string),
       theftLocation: formData.get('theftLocation') as string,
@@ -36,64 +32,81 @@ export async function POST(request: NextRequest) {
       policeReport: formData.get('policeReport') as string,
     };
 
-    // Validasi
-    if (!bikeData.vin || !bikeData.make || !theftData.theftDate || !theftData.theftLocation || !reporterData.email) {
+    // --- 2. Validasi & Clean Data ---
+    // Hapus VIN jika empty string, biarkan null
+    if (bikeData.vin === '') {
+      bikeData.vin = null;
+    }
+
+    // Validasi required fields (tanpa VIN)
+    if (!bikeData.make || !theftData.theftDate || !theftData.theftLocation || !reporterData.email) {
       return NextResponse.json(
-        { error: 'Missing required fields (VIN, Make, Theft Date, Location, Reporter Email are required)' },
+        { error: 'Missing required fields (Make, Theft Date, Location, Reporter Email are required)' },
         { status: 400 }
       );
     }
 
-    // --- 2. Logika Database: User dan Bike (Gunakan Upsert) ---
-
-    // Cari atau Buat User berdasarkan Email
+    // --- 3. User Upsert ---
     const user = await db.user.upsert({
       where: { email: reporterData.email },
-      update: { // Update nama/telepon jika pengguna sudah ada
+      update: {
         name: reporterData.name,
         phone: reporterData.phone,
       },
-      create: { // Buat pengguna baru jika email belum ada
+      create: {
         email: reporterData.email,
         name: reporterData.name,
         phone: reporterData.phone,
       },
     });
 
-    // **PERBAIKAN UNTUK P2002 (Unique Constraint)**
-    // Cari atau Buat Motor berdasarkan VIN (Nomor Rangka)
-    const bike = await db.bike.upsert({
-      where: { vin: bikeData.vin }, // Kunci unik
-      update: { // Jika motor sudah ada di DB, update datanya
+    // --- 4. BIKE CREATION - FIXED LOGIC ---
+    let bike;
+    
+    if (bikeData.vin) {
+      // Jika VIN ada, gunakan upsert berdasarkan VIN
+      bike = await db.bike.upsert({
+        where: { vin: bikeData.vin },
+        update: {
+          ...bikeData,
+          ownerId: user.id,
+        },
+        create: {
+          ...bikeData,
+          ownerId: user.id,
+        },
+      });
+    } else {
+      // Jika VIN tidak ada, CREATE BIKE BARU tanpa upsert
+      // Hapus field unique yang empty
+      const createBikeData = {
         ...bikeData,
         ownerId: user.id,
-      },
-      create: { // Jika motor belum ada, buat baru
-        ...bikeData,
-        ownerId: user.id,
-      },
-    });
+        vin: null,
+        engineNumber: bikeData.engineNumber || null,
+        plateNumber: bikeData.plateNumber || null,
+      };
 
-    // --- 3. Logika Upload Gambar (Gunakan Vercel Blob) ---
+      bike = await db.bike.create({
+        data: createBikeData
+      });
+    }
 
+    // --- 5. Upload Gambar ---
     const images = formData.getAll('images') as File[];
     const imageUrls: string[] = [];
 
     for (const image of images) {
       if (image instanceof File && image.size > 0) {
-        // Buat nama file unik
-        const filename = `${Date.now()}-${bikeData.vin}-${image.name}`;
+        const filename = `${Date.now()}-${bike.id}-${image.name}`;
         
-        // Upload ke Vercel Blob
         const blob = await put(filename, image, {
-          access: 'public', // Buat file dapat diakses publik
+          access: 'public',
         });
         
-        // Simpan URL publik dari Vercel Blob
         const imageUrl = blob.url;
         imageUrls.push(imageUrl);
         
-        // Buat record gambar di database, hubungkan ke motor
         await db.bikeImage.create({
           data: {
             url: imageUrl,
@@ -104,45 +117,43 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // --- 4. Buat Laporan Pencurian (Theft Report) ---
-    
-    // Sekarang kita bisa membuat laporan pencurian, karena kita pasti punya 'bike.id'
+    // --- 6. Buat Theft Report ---
     const theftReport = await db.theftReport.create({
       data: {
         ...theftData,
-        bikeId: bike.id,      // Hubungkan ke motor
-        reportedBy: user.id,  // Hubungkan ke pelapor
+        bikeId: bike.id,
+        reportedBy: user.id,
       }
     });
 
-    // --- 5. Kirim Respon Sukses ---
+    // --- 7. Response ---
     return NextResponse.json({
       message: 'Theft report submitted successfully',
       reportId: theftReport.id,
       bikeId: bike.id,
       imageCount: imageUrls.length,
-      imageUrls: imageUrls, // Kirim kembali URL gambar yang di-upload
     }, { status: 201 });
 
   } catch (error) {
     console.error('Error submitting theft report:', error);
 
-    // Tangani error P2002 (Unique Constraint) secara spesifik jika masih terjadi
-    // (Meskipun upsert seharusnya sudah menanganinya, ini adalah praktik yang baik)
+    // Handle specific errors
     if (error instanceof Prisma.PrismaClientKnownRequestError) {
       if (error.code === 'P2002') {
+        const field = error.meta?.target?.[0];
         return NextResponse.json(
-          { error: 'A unique constraint violation occurred. This might be a temporary issue, please try again.' },
-          { status: 409 } // 409 Conflict
+          { 
+            error: 'Data sudah ada', 
+            message: `${field} sudah terdaftar dalam sistem` 
+          },
+          { status: 409 }
         );
       }
     }
     
-    // Tangani error lainnya
     return NextResponse.json(
       { error: 'Internal server error' },
       { status: 500 }
     );
   }
 }
-
