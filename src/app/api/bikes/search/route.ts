@@ -21,11 +21,28 @@ export async function GET(request: NextRequest) {
       );
     }
 
+    // Handle empty value for VIN search
+    if (type === 'vin' && (!value || value.trim() === '')) {
+      return NextResponse.json(
+        { error: 'VIN value cannot be empty' },
+        { status: 400 }
+      );
+    }
+
     // Build search query based on type
     let searchField = '';
+    let searchValue = value.trim();
+    
     switch (type) {
       case 'vin':
         searchField = 'vin';
+        // Untuk VIN, kita tidak ingin mencari null/empty values
+        if (!searchValue) {
+          return NextResponse.json(
+            { error: 'VIN value cannot be empty' },
+            { status: 400 }
+          );
+        }
         break;
       case 'engine':
         searchField = 'engineNumber';
@@ -39,7 +56,7 @@ export async function GET(request: NextRequest) {
     const bike = await db.bike.findFirst({
       where: {
         [searchField]: {
-          equals: value,
+          equals: searchValue,
           mode: 'insensitive' // Case-insensitive search
         }
       },
