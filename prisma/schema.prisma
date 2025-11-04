@@ -58,7 +58,7 @@ model TheftReport {
   updatedAt     DateTime @updatedAt
   
   // Relations
-  bikeId        String
+  bikeId        String   @unique
   bike          Bike     @relation(fields: [bikeId], references: [id])
   reportedBy    String
   reporter      User     @relation(fields: [reportedBy], references: [id])
