@@ -1,13 +1,26 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
-import { put } from '@vercel/blob';
 import { Prisma } from '@prisma/client';
+
+export const runtime = 'nodejs';
 
 export async function POST(request: NextRequest) {
   try {
     const formData = await request.formData();
-    
-    // --- 1. Ekstrak Data dari FormData ---
+
+    let put: any;
+    try {
+      const blobModule = await import('@vercel/blob');
+      put = blobModule.put;
+      if (!put) throw new Error('@vercel/blob does not export "put"');
+    } catch (err) {
+      console.error('Missing or incompatible @vercel/blob module:', err);
+      return NextResponse.json(
+        { error: 'Server misconfiguration: missing @vercel/blob. Run `npm install @vercel/blob` and redeploy.' },
+        { status: 500 }
+      );
+    }
+
     const reporterData = {
       email: formData.get('reporterEmail') as string,
       name: formData.get('reporterName') as string,
@@ -32,13 +45,10 @@ export async function POST(request: NextRequest) {
       policeReport: formData.get('policeReport') as string,
     };
 
-    // --- 2. Validasi & Clean Data ---
-    // Hapus VIN jika empty string, biarkan null
     if (bikeData.vin === '') {
       bikeData.vin = null;
     }
 
-    // Validasi required fields (tanpa VIN)
     if (!bikeData.make || !theftData.theftDate || !theftData.theftLocation || !reporterData.email) {
       return NextResponse.json(
         { error: 'Missing required fields (Make, Theft Date, Location, Reporter Email are required)' },
@@ -46,7 +56,6 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // --- 3. User Upsert ---
     const user = await db.user.upsert({
       where: { email: reporterData.email },
       update: {
@@ -60,11 +69,8 @@ export async function POST(request: NextRequest) {
       },
     });
 
-    // --- 4. BIKE CREATION - FIXED LOGIC ---
     let bike;
-    
     if (bikeData.vin) {
-      // Jika VIN ada, gunakan upsert berdasarkan VIN
       bike = await db.bike.upsert({
         where: { vin: bikeData.vin },
         update: {
@@ -77,8 +83,6 @@ export async function POST(request: NextRequest) {
         },
       });
     } else {
-      // Jika VIN tidak ada, CREATE BIKE BARU tanpa upsert
-      // Hapus field unique yang empty
       const createBikeData = {
         ...bikeData,
         ownerId: user.id,
@@ -87,73 +91,57 @@ export async function POST(request: NextRequest) {
         plateNumber: bikeData.plateNumber || null,
       };
 
-      bike = await db.bike.create({
-        data: createBikeData
-      });
+      bike = await db.bike.create({ data: createBikeData });
     }
 
-    // --- 5. Upload Gambar ---
     const images = formData.getAll('images') as File[];
     const imageUrls: string[] = [];
 
     for (const image of images) {
       if (image instanceof File && image.size > 0) {
         const filename = `${Date.now()}-${bike.id}-${image.name}`;
-        
-        const blob = await put(filename, image, {
-          access: 'public',
-        });
-        
+        const blob = await put(filename, image, { access: 'public' });
         const imageUrl = blob.url;
         imageUrls.push(imageUrl);
-        
+
         await db.bikeImage.create({
           data: {
             url: imageUrl,
             filename: image.name,
             bikeId: bike.id,
-          }
+          },
         });
       }
     }
 
-    // --- 6. Buat Theft Report ---
     const theftReport = await db.theftReport.create({
       data: {
         ...theftData,
         bikeId: bike.id,
         reportedBy: user.id,
-      }
+      },
     });
 
-    // --- 7. Response ---
-    return NextResponse.json({
-      message: 'Theft report submitted successfully',
-      reportId: theftReport.id,
-      bikeId: bike.id,
-      imageCount: imageUrls.length,
-    }, { status: 201 });
-
+    return NextResponse.json(
+      {
+        message: 'Theft report submitted successfully',
+        reportId: theftReport.id,
+        bikeId: bike.id,
+        imageCount: imageUrls.length,
+      },
+      { status: 201 }
+    );
   } catch (error) {
     console.error('Error submitting theft report:', error);
-
-    // Handle specific errors
     if (error instanceof Prisma.PrismaClientKnownRequestError) {
       if (error.code === 'P2002') {
         const field = error.meta?.target?.[0];
         return NextResponse.json(
-          { 
-            error: 'Data sudah ada', 
-            message: `${field} sudah terdaftar dalam sistem` 
-          },
+          { error: 'Data sudah ada', message: `${field} sudah terdaftar dalam sistem` },
           { status: 409 }
         );
       }
     }
-    
-    return NextResponse.json(
-      { error: 'Internal server error' },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }
